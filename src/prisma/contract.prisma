@@ -1,0 +1,195 @@
+// use prisma-next
+
+enum UserRole {
+  ADMIN
+  FACULTY
+  STUDENT
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+}
+
+enum AttendanceSource {
+  BLE
+  MANUAL
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         UserRole
+  isActive     Boolean  @default(true)
+
+  student      Student?
+  faculty      Faculty?
+  notifications Notification[]
+
+  createdAt    TimestamptzString @default(now())
+  updatedAt    temporal.updatedAtString()
+}
+
+model Department {
+  id          Int      @id @default(autoincrement())
+  name        String
+  code        String   @unique
+
+  students    Student[]
+  faculty     Faculty[]
+  subjects    Subject[]
+  classes     Class[]
+
+  createdAt   TimestamptzString @default(now())
+  updatedAt   temporal.updatedAtString()
+}
+
+model Student {
+  id             Int      @id @default(autoincrement())
+  userId         Int      @unique
+  registerNumber String   @unique
+  departmentId   Int
+  semester       Int
+  section        String
+  academicYear   String
+
+  user           User       @relation(fields: [userId], references: [id])
+  department     Department @relation(fields: [departmentId], references: [id])
+  enrollments    Enrollment[]
+  attendance     Attendance[]
+
+  createdAt      TimestamptzString @default(now())
+  updatedAt      temporal.updatedAtString()
+}
+
+model Faculty {
+  id           Int      @id @default(autoincrement())
+  userId       Int      @unique
+  employeeId   String   @unique
+  departmentId Int
+
+  user         User       @relation(fields: [userId], references: [id])
+  department   Department @relation(fields: [departmentId], references: [id])
+  classes      Class[]
+
+  createdAt    TimestamptzString @default(now())
+  updatedAt    temporal.updatedAtString()
+}
+
+model Subject {
+  id           Int      @id @default(autoincrement())
+  name         String
+  code         String   @unique
+  departmentId Int
+  credits      Int
+
+  department   Department @relation(fields: [departmentId], references: [id])
+  classes      Class[]
+
+  createdAt    TimestamptzString @default(now())
+  updatedAt    temporal.updatedAtString()
+}
+
+model Class {
+  id           Int      @id @default(autoincrement())
+  subjectId    Int
+  facultyId    Int
+  departmentId Int
+  semester     Int
+  section      String
+  academicYear String
+
+  subject      Subject    @relation(fields: [subjectId], references: [id])
+  faculty      Faculty    @relation(fields: [facultyId], references: [id])
+  department   Department @relation(fields: [departmentId], references: [id])
+  enrollments  Enrollment[]
+  timetable    Timetable[]
+  sessions     AttendanceSession[]
+
+  createdAt    TimestamptzString @default(now())
+  updatedAt    temporal.updatedAtString()
+}
+
+model Enrollment {
+  id        Int      @id @default(autoincrement())
+  studentId Int
+  classId   Int
+
+  student   Student @relation(fields: [studentId], references: [id])
+  class     Class   @relation(fields: [classId], references: [id])
+
+  createdAt TimestamptzString @default(now())
+}
+
+model Timetable {
+  id          Int      @id @default(autoincrement())
+  classId     Int
+  dayOfWeek   Int
+  startTime   String
+  endTime     String
+  room        String?
+
+  class       Class @relation(fields: [classId], references: [id])
+
+  createdAt   TimestamptzString @default(now())
+  updatedAt   temporal.updatedAtString()
+}
+
+model AttendanceSession {
+  id          Int      @id @default(autoincrement())
+  classId     Int
+  sessionDate TimestamptzString
+  startedAt   TimestamptzString @default(now())
+  endedAt     TimestamptzString?
+
+  class       Class        @relation(fields: [classId], references: [id])
+  attendance  Attendance[]
+
+  createdAt   TimestamptzString @default(now())
+  updatedAt   temporal.updatedAtString()
+}
+
+model Attendance {
+  id         Int              @id @default(autoincrement())
+  sessionId  Int
+  studentId  Int
+  status     AttendanceStatus
+  markedAt   TimestamptzString @default(now())
+  source     AttendanceSource
+  modifiedBy Int?
+
+  session    AttendanceSession @relation(fields: [sessionId], references: [id])
+  student    Student            @relation(fields: [studentId], references: [id])
+  logs       AttendanceLog[]
+
+  createdAt  TimestamptzString @default(now())
+  updatedAt  temporal.updatedAtString()
+}
+
+model AttendanceLog {
+  id           Int              @id @default(autoincrement())
+  attendanceId Int
+  oldStatus    AttendanceStatus
+  newStatus    AttendanceStatus
+  changedBy    Int
+  reason       String?
+  changedAt    TimestamptzString @default(now())
+
+  attendance   Attendance @relation(fields: [attendanceId], references: [id])
+}
+
+model Notification {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  title     String
+  message   String
+  isRead    Boolean  @default(false)
+
+  user      User     @relation(fields: [userId], references: [id])
+
+  createdAt TimestamptzString @default(now())
+  updatedAt temporal.updatedAtString()
+}

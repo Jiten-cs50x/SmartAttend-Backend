@@ -1,0 +1,34 @@
+{
+  "name": "Rahul Kumar",
+  "email": "rahul@college.com",
+  "password": "Rahul@123",
+  "registerNumber": "23CSE001",
+  "departmentId": 1,
+  "semester": 7,
+  "section": "A",
+  "academicYear": "2026-27"
+}
+
+{
+  "name": "Dr. Ahmed Khan",
+  "email": "ahmed@college.com",
+  "password": "Ahmed@123",
+  "employeeId": "FAC001",
+  "departmentId": 1
+}
+
+{
+  "name": "Database Management Systems",
+  "code": "CS701",
+  "departmentId": 1,
+  "credits": 4
+}
+
+{
+  "subjectId": 1,
+  "facultyId": 1,
+  "departmentId": 1,
+  "semester": 7,
+  "section": "A",
+  "academicYear": "2026-27"
+}
