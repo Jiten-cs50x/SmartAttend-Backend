@@ -29,7 +29,7 @@ export const getAttendance = async (req, res) => {
 export const createAttendanceSession = async (req, res) => {
   try {
     const userId = Number(req.user.id);
-    const { classId, sessionDate } = req.body;
+    const { classId } = req.body;
 
     if (!classId) {
       return res.status(400).json({
@@ -38,7 +38,10 @@ export const createAttendanceSession = async (req, res) => {
       });
     }
 
-    // Find faculty linked to logged-in user
+    // --------------------------------------------------
+    // 1. Find logged-in faculty
+    // --------------------------------------------------
+
     const facultyList = await db.orm.public.Faculty.all();
 
     const faculty = facultyList.find((item) => item.userId === userId);
@@ -50,7 +53,10 @@ export const createAttendanceSession = async (req, res) => {
       });
     }
 
-    // Find class
+    // --------------------------------------------------
+    // 2. Find the class
+    // --------------------------------------------------
+
     const classes = await db.orm.public.Class.all();
 
     const selectedClass = classes.find(
@@ -64,22 +70,129 @@ export const createAttendanceSession = async (req, res) => {
       });
     }
 
-    // Create session
+    // --------------------------------------------------
+    // 3. Find today's timetable
+    // --------------------------------------------------
+
+    const timetables = await db.orm.public.Timetable.all();
+
+    const now = new Date();
+
+    // JavaScript:
+    // Sunday = 0
+    // Monday = 1
+    // Tuesday = 2
+    // ...
+    // Saturday = 6
+
+    const todayDay = now.getDay();
+
+    const todayTimetable = timetables.find(
+      (item) => item.classId === Number(classId) && item.dayOfWeek === todayDay,
+    );
+
+    if (!todayTimetable) {
+      return res.status(400).json({
+        success: false,
+        message: "This class is not scheduled for today",
+      });
+    }
+
+    // --------------------------------------------------
+    // 4. Convert timetable start/end into today's dates
+    // --------------------------------------------------
+
+    const [startHour, startMinute] = todayTimetable.startTime
+      .split(":")
+      .map(Number);
+
+    const [endHour, endMinute] = todayTimetable.endTime.split(":").map(Number);
+
+    const scheduleStart = new Date(now);
+
+    scheduleStart.setHours(startHour, startMinute, 0, 0);
+
+    const scheduleEnd = new Date(now);
+
+    scheduleEnd.setHours(endHour, endMinute, 0, 0);
+
+    // --------------------------------------------------
+    // 5. Too early
+    // --------------------------------------------------
+
+    if (now < scheduleStart) {
+      return res.status(400).json({
+        success: false,
+        message: `Attendance can only be started at ${todayTimetable.startTime}`,
+      });
+    }
+
+    // --------------------------------------------------
+    // 6. Too late
+    // --------------------------------------------------
+
+    if (now >= scheduleEnd) {
+      return res.status(400).json({
+        success: false,
+        message: `Attendance session for this class ended at ${todayTimetable.endTime}`,
+      });
+    }
+
+    // --------------------------------------------------
+    // 7. Check whether a session already exists
+    // --------------------------------------------------
+
+    const sessions = await db.orm.public.AttendanceSession.all();
+
+    const activeSession = sessions.find(
+      (session) =>
+        session.classId === Number(classId) &&
+        !session.endedAt &&
+        session.startedAt &&
+        new Date(session.startedAt) >= scheduleStart &&
+        new Date(session.startedAt) < scheduleEnd,
+    );
+
+    if (activeSession) {
+      return res.status(409).json({
+        success: false,
+        message: "An attendance session is already active for this class",
+        data: activeSession,
+      });
+    }
+
+    // --------------------------------------------------
+    // 8. Create attendance session
+    // --------------------------------------------------
+
     const session = await db.orm.public.AttendanceSession.create({
       classId: Number(classId),
-      sessionDate: sessionDate ? new Date(sessionDate) : new Date(),
-      startedAt: new Date(),
+      sessionDate: now,
+      startedAt: now,
     });
 
-    res.status(201).json({
+    // --------------------------------------------------
+    // 9. Return session + schedule information
+    // --------------------------------------------------
+
+    return res.status(201).json({
       success: true,
       message: "Attendance session created successfully",
-      data: session,
+
+      data: {
+        ...session,
+
+        timetableId: todayTimetable.id,
+
+        scheduledStart: scheduleStart,
+
+        scheduledEnd: scheduleEnd,
+      },
     });
   } catch (error) {
     console.error("Error creating attendance session:", error);
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Failed to create attendance session",
     });
@@ -595,11 +708,41 @@ export const finalizeAttendanceSession = async (req, res) => {
       });
     }
 
+    // Prevent finalizing an already finalized session
     if (session.endedAt) {
       return res.status(400).json({
         success: false,
         message: "Attendance session is already finalized",
       });
+    }
+
+    // Get all students enrolled in this class
+    const enrollments = await db.orm.public.Enrollment.all();
+
+    const classEnrollments = enrollments.filter(
+      (enrollment) => enrollment.classId === session.classId,
+    );
+
+    // Get existing attendance records
+    const attendanceList = await db.orm.public.Attendance.all();
+
+    // Create ABSENT attendance for students who were not marked
+    for (const enrollment of classEnrollments) {
+      const existingAttendance = attendanceList.find(
+        (attendance) =>
+          attendance.sessionId === sessionId &&
+          attendance.studentId === enrollment.studentId,
+      );
+
+      if (!existingAttendance) {
+        await db.orm.public.Attendance.create({
+          sessionId: sessionId,
+          studentId: enrollment.studentId,
+          status: "ABSENT",
+          source: "MANUAL",
+          modifiedBy: userId,
+        });
+      }
     }
 
     // Mark session as completed
@@ -735,6 +878,472 @@ export const getFacultyAttendanceHistory = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch faculty attendance history",
+    });
+  }
+};
+
+// ---------------------------------------------------------
+// BLE ATTENDANCE VERIFICATION
+// ---------------------------------------------------------
+
+export const verifyBleAttendance = async (req, res) => {
+  try {
+    const userId = Number(req.user.id);
+    const { sessionId, cryptographicKey } = req.body;
+
+    // Validate request
+    if (!sessionId || !cryptographicKey) {
+      return res.status(400).json({
+        success: false,
+        message: "Session ID and cryptographic key are required",
+      });
+    }
+
+    const parsedSessionId = Number(sessionId);
+
+    if (!Number.isInteger(parsedSessionId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid session ID",
+      });
+    }
+
+    // -------------------------------------------------------
+    // 1. Find logged-in faculty
+    // -------------------------------------------------------
+
+    const facultyList = await db.orm.public.Faculty.all();
+
+    const faculty = facultyList.find((item) => item.userId === userId);
+
+    if (!faculty) {
+      return res.status(404).json({
+        success: false,
+        message: "Faculty profile not found",
+      });
+    }
+
+    // -------------------------------------------------------
+    // 2. Find attendance session
+    // -------------------------------------------------------
+
+    const sessions = await db.orm.public.AttendanceSession.all();
+
+    const session = sessions.find((item) => item.id === parsedSessionId);
+
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        message: "Attendance session not found",
+      });
+    }
+
+    // -------------------------------------------------------
+    // 3. Check session is still open
+    // -------------------------------------------------------
+
+    if (session.endedAt) {
+      return res.status(400).json({
+        success: false,
+        message: "Attendance session is already finalized",
+      });
+    }
+
+    // -------------------------------------------------------
+    // 4. Verify faculty owns this session's class
+    // -------------------------------------------------------
+
+    const classes = await db.orm.public.Class.all();
+
+    const classItem = classes.find(
+      (item) => item.id === session.classId && item.facultyId === faculty.id,
+    );
+
+    if (!classItem) {
+      return res.status(403).json({
+        success: false,
+        message: "You do not have access to this attendance session",
+      });
+    }
+
+    // -------------------------------------------------------
+    // 5. Find student device using cryptographic key
+    // -------------------------------------------------------
+
+    const devices = await db.orm.public.StudentDevice.all();
+
+    const device = devices.find(
+      (item) => item.publicKey === cryptographicKey && item.isActive === true,
+    );
+
+    if (!device) {
+      return res.status(404).json({
+        success: false,
+        message: "Student device is not registered or is inactive",
+      });
+    }
+
+    // -------------------------------------------------------
+    // 6. Identify student
+    // -------------------------------------------------------
+
+    const students = await db.orm.public.Student.all();
+
+    const student = students.find((item) => item.id === device.studentId);
+
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: "Student associated with this device was not found",
+      });
+    }
+
+    // -------------------------------------------------------
+    // 7. Check student enrollment
+    // -------------------------------------------------------
+
+    const enrollments = await db.orm.public.Enrollment.all();
+
+    const enrolled = enrollments.some(
+      (item) =>
+        item.studentId === student.id && item.classId === session.classId,
+    );
+
+    if (!enrolled) {
+      return res.status(400).json({
+        success: false,
+        message: "Student is not enrolled in this class",
+      });
+    }
+
+    // -------------------------------------------------------
+    // 8. Check existing attendance
+    // -------------------------------------------------------
+
+    const attendanceRecords = await db.orm.public.Attendance.all();
+
+    const existingAttendance = attendanceRecords.find(
+      (item) =>
+        item.sessionId === parsedSessionId && item.studentId === student.id,
+    );
+
+    if (existingAttendance) {
+      return res.status(409).json({
+        success: false,
+        message: "Attendance already marked for this student",
+        data: {
+          studentId: student.id,
+          registerNumber: student.registerNumber,
+          status: existingAttendance.status,
+          source: existingAttendance.source,
+          attendanceId: existingAttendance.id,
+        },
+      });
+    }
+
+    // -------------------------------------------------------
+    // 9. Mark attendance as PRESENT using BLE
+    // -------------------------------------------------------
+
+    const attendance = await db.orm.public.Attendance.create({
+      sessionId: parsedSessionId,
+      studentId: student.id,
+      status: "PRESENT",
+      source: "BLE",
+      modifiedBy: faculty.userId,
+    });
+
+    // -------------------------------------------------------
+    // 10. Return result to BLE/Android side
+    // -------------------------------------------------------
+
+    res.status(201).json({
+      success: true,
+      message: "BLE attendance marked successfully",
+      data: {
+        attendanceId: attendance.id,
+        sessionId: parsedSessionId,
+        studentId: student.id,
+        registerNumber: student.registerNumber,
+        status: attendance.status,
+        source: attendance.source,
+      },
+    });
+  } catch (error) {
+    console.error("BLE attendance verification error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to verify BLE attendance",
+    });
+  }
+};
+
+// ---------------------------------------------------------
+// STUDENT BLE ATTENDANCE VERIFICATION
+// ---------------------------------------------------------
+
+export const verifyStudentBleAttendance = async (req, res) => {
+  try {
+    const userId = Number(req.user.id);
+    const { sessionId, rssi } = req.body;
+
+    // 1. Validate request
+    if (!sessionId) {
+      return res.status(400).json({
+        success: false,
+        message: "Session ID is required",
+      });
+    }
+
+    const parsedSessionId = Number(sessionId);
+
+    if (!Number.isInteger(parsedSessionId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid session ID",
+      });
+    }
+
+    // 2. Find logged-in student
+    const students = await db.orm.public.Student.all();
+
+    const student = students.find((item) => item.userId === userId);
+
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: "Student profile not found",
+      });
+    }
+
+    // 3. Find attendance session
+    const sessions = await db.orm.public.AttendanceSession.all();
+
+    const session = sessions.find((item) => item.id === parsedSessionId);
+
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        message: "Attendance session not found",
+      });
+    }
+
+    // 4. Session must still be open
+    if (session.endedAt) {
+      return res.status(400).json({
+        success: false,
+        message: "Attendance session is already finalized",
+      });
+    }
+
+    // 5. Check student enrollment
+    const enrollments = await db.orm.public.Enrollment.all();
+
+    const enrolled = enrollments.some(
+      (item) =>
+        item.studentId === student.id && item.classId === session.classId,
+    );
+
+    if (!enrolled) {
+      return res.status(403).json({
+        success: false,
+        message: "Student is not enrolled in this class",
+      });
+    }
+
+    // 6. Check registered active device
+    const devices = await db.orm.public.StudentDevice.all();
+
+    const device = devices.find(
+      (item) => item.studentId === student.id && item.isActive === true,
+    );
+
+    if (!device) {
+      return res.status(403).json({
+        success: false,
+        message: "No active registered device found",
+      });
+    }
+
+    // 7. Prevent duplicate attendance
+    const attendanceRecords = await db.orm.public.Attendance.all();
+
+    const existingAttendance = attendanceRecords.find(
+      (item) =>
+        item.sessionId === parsedSessionId && item.studentId === student.id,
+    );
+
+    if (existingAttendance) {
+      return res.status(409).json({
+        success: false,
+        message: "Attendance already marked for this student",
+        data: {
+          attendanceId: existingAttendance.id,
+          sessionId: parsedSessionId,
+          studentId: student.id,
+          registerNumber: student.registerNumber,
+          status: existingAttendance.status,
+          source: existingAttendance.source,
+        },
+      });
+    }
+
+    // 8. Mark PRESENT
+    const attendance = await db.orm.public.Attendance.create({
+      sessionId: parsedSessionId,
+      studentId: student.id,
+      status: "PRESENT",
+      source: "BLE",
+      modifiedBy: userId,
+    });
+
+    console.log("STUDENT BLE ATTENDANCE MARKED:", {
+      sessionId: parsedSessionId,
+      studentId: student.id,
+      rssi,
+      attendanceId: attendance.id,
+    });
+
+    // 9. Return success
+    return res.status(201).json({
+      success: true,
+      message: "Attendance marked successfully",
+      data: {
+        attendanceId: attendance.id,
+        sessionId: parsedSessionId,
+        studentId: student.id,
+        registerNumber: student.registerNumber,
+        status: attendance.status,
+        source: attendance.source,
+        rssi: rssi ?? null,
+      },
+    });
+  } catch (error) {
+    console.error("Student BLE attendance verification error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to verify student BLE attendance",
+    });
+  }
+};
+export const getStudentActiveSession = async (req, res) => {
+  try {
+    const classId = Number(req.params.classId);
+
+    if (!Number.isInteger(classId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid class ID",
+      });
+    }
+
+    const now = new Date();
+
+    // --------------------------------------------------
+    // 1. Find today's timetable
+    // --------------------------------------------------
+
+    const timetables = await db.orm.public.Timetable.all();
+
+    const todayDay = now.getDay();
+
+    const timetable = timetables.find(
+      (item) => item.classId === classId && item.dayOfWeek === todayDay,
+    );
+
+    if (!timetable) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          active: false,
+        },
+      });
+    }
+
+    // --------------------------------------------------
+    // 2. Convert timetable time to today's Date
+    // --------------------------------------------------
+
+    const [startHour, startMinute] = timetable.startTime.split(":").map(Number);
+
+    const [endHour, endMinute] = timetable.endTime.split(":").map(Number);
+
+    const scheduleStart = new Date(now);
+
+    scheduleStart.setHours(startHour, startMinute, 0, 0);
+
+    const scheduleEnd = new Date(now);
+
+    scheduleEnd.setHours(endHour, endMinute, 0, 0);
+
+    // --------------------------------------------------
+    // 3. Outside class time = inactive
+    // --------------------------------------------------
+
+    if (now < scheduleStart || now >= scheduleEnd) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          active: false,
+        },
+      });
+    }
+
+    // --------------------------------------------------
+    // 4. Find active attendance session
+    // --------------------------------------------------
+
+    const sessions = await db.orm.public.AttendanceSession.all();
+
+    const activeSession = sessions.find(
+      (session) =>
+        session.classId === classId &&
+        session.startedAt &&
+        !session.endedAt &&
+        new Date(session.startedAt) >= scheduleStart &&
+        new Date(session.startedAt) < scheduleEnd,
+    );
+
+    // --------------------------------------------------
+    // 5. Faculty hasn't started
+    // --------------------------------------------------
+
+    if (!activeSession) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          active: false,
+        },
+      });
+    }
+
+    // --------------------------------------------------
+    // 6. Active session found
+    // --------------------------------------------------
+
+    return res.status(200).json({
+      success: true,
+
+      data: {
+        active: true,
+
+        sessionId: activeSession.id,
+
+        startedAt: activeSession.startedAt,
+
+        scheduledStart: scheduleStart,
+
+        scheduledEnd: scheduleEnd,
+      },
+    });
+  } catch (error) {
+    console.error("Student active session error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to check active attendance session",
     });
   }
 };

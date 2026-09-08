@@ -11,6 +11,8 @@ import attendanceRoutes from "./routes/attendanceRoutes.js";
 import authRoutes from "./routes/authRoutes.js";
 import studentApiRoutes from "./routes/studentApiRoutes.js";
 import facultyApiRoutes from "./routes/facultyApiRoutes.js";
+import studentDeviceRoutes from "./routes/studentDeviceRoutes.js";
+import adminRoutes from "./routes/adminRoutes.js";
 
 const app = express();
 
@@ -39,7 +41,9 @@ app.use("/api/enrollments", enrollmentRoutes);
 app.use("/api/timetable", timetableRoutes);
 app.use("/api/attendance", attendanceRoutes);
 app.use("/api/auth", authRoutes);
+app.use("/api/admin", adminRoutes);
 app.use("/api/student", studentApiRoutes);
+app.use("/api/student", studentDeviceRoutes);
 app.use("/api/faculty", facultyApiRoutes);
 
 export default app;

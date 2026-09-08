@@ -4,25 +4,51 @@ import { generateToken } from "../utils/jwt.js";
 
 export const login = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { identifier, password } = req.body;
 
-    if (!email || !password) {
+    if (!identifier || !password) {
       return res.status(400).json({
         success: false,
-        message: "Email and password are required",
+        message: "Identifier and password are required",
       });
     }
 
-    const users = await db.orm.public.User.all();
+    const normalizedIdentifier = String(identifier).trim().toLowerCase();
 
-    const user = users.find(
-      (item) => item.email.toLowerCase() === email.toLowerCase(),
+    const users = await db.orm.public.User.all();
+    const students = await db.orm.public.Student.all();
+    const faculties = await db.orm.public.Faculty.all();
+
+    let user = users.find(
+      (item) => item.email.toLowerCase() === normalizedIdentifier,
     );
+
+    // Student login using USN / register number
+    if (!user) {
+      const student = students.find(
+        (item) => item.registerNumber.toLowerCase() === normalizedIdentifier,
+      );
+
+      if (student) {
+        user = users.find((item) => item.id === student.userId);
+      }
+    }
+
+    // Faculty login using Faculty ID / employee ID
+    if (!user) {
+      const faculty = faculties.find(
+        (item) => item.employeeId.toLowerCase() === normalizedIdentifier,
+      );
+
+      if (faculty) {
+        user = users.find((item) => item.id === faculty.userId);
+      }
+    }
 
     if (!user) {
       return res.status(401).json({
         success: false,
-        message: "Invalid email or password",
+        message: "Invalid identifier or password",
       });
     }
 
@@ -38,13 +64,13 @@ export const login = async (req, res) => {
     if (!passwordValid) {
       return res.status(401).json({
         success: false,
-        message: "Invalid email or password",
+        message: "Invalid identifier or password",
       });
     }
 
     const token = generateToken(user);
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: "Login successful",
       data: {
@@ -60,7 +86,7 @@ export const login = async (req, res) => {
   } catch (error) {
     console.error("Login error:", error);
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Login failed",
     });

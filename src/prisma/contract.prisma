@@ -60,9 +60,22 @@ model Student {
   department     Department @relation(fields: [departmentId], references: [id])
   enrollments    Enrollment[]
   attendance     Attendance[]
+  devices        StudentDevice[]
 
   createdAt      TimestamptzString @default(now())
   updatedAt      temporal.updatedAtString()
+}
+
+model StudentDevice {
+  id         Int      @id @default(autoincrement())
+  studentId  Int
+  publicKey  String   @unique
+  isActive   Boolean  @default(true)
+
+  student    Student  @relation(fields: [studentId], references: [id])
+
+  createdAt  TimestamptzString @default(now())
+  updatedAt  temporal.updatedAtString()
 }
 
 model Faculty {

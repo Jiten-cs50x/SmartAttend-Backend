@@ -32,3 +32,8 @@
   "section": "A",
   "academicYear": "2026-27"
 }
+
+{
+  "email": "admin@college.com",
+  "password": "admin123"
+}

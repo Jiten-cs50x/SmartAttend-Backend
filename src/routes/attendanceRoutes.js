@@ -8,6 +8,9 @@ import {
   getAttendanceSession,
   getSessionParticipants,
   finalizeAttendanceSession,
+  verifyBleAttendance,
+  verifyStudentBleAttendance,
+  getStudentActiveSession,
 } from "../controllers/attendanceController.js";
 
 import { authenticate } from "../middleware/authMiddleware.js";
@@ -20,6 +23,20 @@ const router = express.Router();
 router.get("/", getAttendance);
 
 router.post("/", authenticate, authorize("FACULTY"), markAttendance);
+
+router.post(
+  "/ble/verify",
+  authenticate,
+  authorize("FACULTY"),
+  verifyBleAttendance,
+);
+
+router.post(
+  "/student/ble/verify",
+  authenticate,
+  authorize("STUDENT"),
+  verifyStudentBleAttendance,
+);
 
 router.put("/:id", authenticate, authorize("FACULTY"), updateAttendance);
 
@@ -50,6 +67,13 @@ router.post(
   authenticate,
   authorize("FACULTY"),
   finalizeAttendanceSession,
+);
+
+router.get(
+  "/student/active-session/:classId",
+  authenticate,
+  authorize("STUDENT"),
+  getStudentActiveSession,
 );
 
 export default router;
