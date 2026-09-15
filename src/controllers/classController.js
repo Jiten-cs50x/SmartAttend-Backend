@@ -93,6 +93,18 @@ export const createClass = async (req, res) => {
       academicYear,
     });
 
+    // Automatically enroll all matching students into the new class
+    const students = await db.orm.public.Student.where({
+      departmentId: Number(departmentId),
+      semester: Number(semester),
+      section: String(section).trim().toUpperCase(),
+      academicYear: academicYear,
+    }).all();
+
+    for (const student of students) {
+      await syncStudentEnrollments(student);
+    }
+
     res.status(201).json({
       success: true,
       message: "Class created successfully",

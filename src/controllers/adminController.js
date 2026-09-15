@@ -103,6 +103,60 @@ export const getAdminStudents = async (req, res) => {
   }
 };
 
+const syncStudentEnrollments = async (student) => {
+  try {
+    const classes = await db.orm.public.Class.where({
+      departmentId: student.departmentId,
+      semester: student.semester,
+      section: student.section,
+      academicYear: student.academicYear,
+    }).all();
+
+    if (!classes.length) {
+      console.log(
+        `No matching classes found for student ${student.registerNumber}`,
+      );
+      return 0;
+    }
+
+    const existingEnrollments = await db.orm.public.Enrollment.where({
+      studentId: student.id,
+    }).all();
+
+    let createdCount = 0;
+
+    for (const classItem of classes) {
+      const alreadyEnrolled = existingEnrollments.some(
+        (enrollment) => Number(enrollment.classId) === Number(classItem.id),
+      );
+
+      if (alreadyEnrolled) {
+        continue;
+      }
+
+      await db.orm.public.Enrollment.create({
+        studentId: student.id,
+        classId: classItem.id,
+      });
+
+      createdCount++;
+    }
+
+    console.log(
+      `Enrollment sync: ${student.registerNumber} -> ${createdCount} class(es)`,
+    );
+
+    return createdCount;
+  } catch (error) {
+    console.error(
+      `Enrollment sync failed for student ${student.registerNumber}:`,
+      error,
+    );
+
+    throw error;
+  }
+};
+
 export const createAdminStudent = async (req, res) => {
   try {
     const {
@@ -221,6 +275,9 @@ export const createAdminStudent = async (req, res) => {
         : "A",
       academicYear: academicYear || "2026-27",
     });
+
+    // Automatically enroll student into matching classes
+    await syncStudentEnrollments(student);
 
     return res.status(201).json({
       success: true,

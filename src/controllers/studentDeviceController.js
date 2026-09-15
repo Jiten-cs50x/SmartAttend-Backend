@@ -1,6 +1,10 @@
 import { db } from "../prisma/db.js";
 
 export const registerStudentDevice = async (req, res) => {
+  console.log("🔥 REGISTER DEVICE HIT", {
+    userId: req.user?.id,
+    body: req.body,
+  });
   try {
     const { publicKey } = req.body;
 
